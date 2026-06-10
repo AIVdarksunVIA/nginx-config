@@ -1,0 +1,95 @@
+# --- DEFAULT CATCH-ALL SERVER ---
+# Drops unauthorized requests matching direct IP scans or unconfigured domains.
+# Prevents attackers from discovering the server's origin IP address.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444; # Connection closed without response
+}
+
+# --- HTTP TO HTTPS REDIRECT ---
+server {
+    listen 80;
+    listen [::]:80;
+    server_name example.com www.example.com;
+    
+    # Enforce secure connections globally
+    return 301 https://$host$request_uri;
+}
+
+# --- MAIN APPLICATION SERVER (HTTPS) ---
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name example.com www.example.com;
+    
+    # Modern TLS configurations (Disabling deprecated TLS v1.0 and v1.1)
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+
+    # --- Custom Logging Infrastructure ---
+    # Log permissions should prevent non-privileged user access
+    access_log /var/log/nginx/app_access.log;
+    error_log /var/log/nginx/app_error.log warn;
+
+    # --- Slow-Rate Attack Mitigation (Slowloris / Connection Saturation) ---
+    # Drops stagnant connections if the client stalls during data transmission
+    client_body_timeout 10s;
+    client_header_timeout 10s;
+    keepalive_timeout 5s 5s;
+    send_timeout 10s;
+
+    # --- Buffer Size Hardening (Buffer Overflow Prevention) ---
+    client_body_buffer_size 128k;
+    client_max_body_size 10m; # Maximum allowed payload/file upload size
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 4k;
+
+    # --- Enterprise Security Headers ---
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    # --- Sensitive File Protection (.env, .git, .htaccess) ---
+    # Restricts access to hidden dotfiles while preserving Let's Encrypt validation (.well-known)
+    location ~ /\.(?!well-known) {
+        deny all;
+        log_not_found off;
+        access_log off;
+        return 404; # Masquerade 403 Forbidden as 404 Not Found to obscure file existence
+    }
+    
+    # --- HIGH-PERFORMANCE UPSTREAM PROXY ---
+    # Use a UNIX domain socket instead of a TCP loopback (127.0.0.1:port).
+    # This bypasses the network stack, significantly reducing latency and CPU overhead,
+    # while leveraging Linux file permissions for enhanced local security.
+    # Works natively with Gunicorn (Python), Kestrel (.NET), Node.js, and Go.
+    location / {
+       
+        # Apply rate limiting and connection concurrency thresholds
+        limit_req zone=anti_goflood burst=20 nodelay;
+        limit_conn anti_slowdown 10;
+    
+        # Forward requests to the local application socket
+        # (Ensure your backend application is configured to listen on this path)
+        proxy_pass http://unix:/run/myapp/myapp.sock;
+
+        # Unified Proxy Headers (Required by almost all frameworks to read real client data)
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Enable proxy buffering to protect upstream workers from slow clients
+        proxy_buffering on;
+        proxy_redirect off;
+
+        # Gateway timeouts for upstream connectivity
+        proxy_read_timeout 30s;
+        proxy_connect_timeout 30s;
+    }
+}
