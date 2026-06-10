@@ -16,7 +16,7 @@ This separation allows you to quickly enable or disable websites without deletin
 To activate the configuration, create a symbolic link from `sites-available` to `sites-enabled` using the following command:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/myapp.conf /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/myconfig.conf /etc/nginx/sites-enabled/
 ```
 
 ### Verifying and Reloading Nginx
